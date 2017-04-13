@@ -22,6 +22,8 @@ export default class CRUKSearchkitLocationInput extends SearchkitComponent {
     radius: React.PropTypes.string,
     location: React.PropTypes.object,
     fixtures: React.PropTypes.array,
+    autoActivateFirstSuggest: React.PropTypes.bool,
+    updateSearch: React.PropTypes.func,
     ...SearchkitComponent.propTypes,
   }
 
@@ -97,6 +99,26 @@ export default class CRUKSearchkitLocationInput extends SearchkitComponent {
     const exitingItem = document.getElementsByClassName('geosuggest-item--disabled');
     if (exitingItem[0]) this.refs.geoSuggest.setState({ userInput: '' });
     this.removeEmptyLabel();
+
+    // Add the first suggest as default on field blur.
+    const { suggests } = this.refs.geoSuggest.state;
+    if (suggests && suggests[0] && !this.refs.geoSuggest.state.activeSuggest) {
+      this.reverseGeocode(suggests[0]);
+    }
+  }
+
+  reverseGeocode(suggest, callback) {
+    const self = this;
+    this.refs.geoSuggest.geocoder.geocode({ placeId: suggest.placeId }, (results, status) => {
+      if (status === window.google.maps.GeocoderStatus.OK && results[0].geometry) {
+        const loc = {
+          placeId: suggest.placeId,
+          lat: results[0].geometry.location.lat(),
+          lng: results[0].geometry.location.lng()
+        };
+        self.props.updateSearch.call(self, { loc }, callback);
+      }
+    });
   }
 
   getSuggestLabel(suggest) {
@@ -156,7 +178,6 @@ export default class CRUKSearchkitLocationInput extends SearchkitComponent {
       }
     } );
   }
-
 
   preformSearch(query) {
     const { lat, lng } = this.state;
@@ -234,8 +255,8 @@ export default class CRUKSearchkitLocationInput extends SearchkitComponent {
             getSuggestLabel={this.getSuggestLabel}
             location={this.props.location}
             radius={this.props.radius}
-            country={this.props.country}
             inputClassName={inputClassName}
+            autoActivateFirstSuggest={this.props.autoActivateFirstSuggest}
           />
           <div className="geoSuggestLoader" ref="geoLoader"></div>
         </div>
