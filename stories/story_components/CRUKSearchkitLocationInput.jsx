@@ -1,31 +1,268 @@
-import React from 'react'
-import { action, linkTo } from '@kadira/storybook'
-import { specs, describe, it } from 'storybook-addon-specifications'
-import { mount } from "enzyme";
-import { expect } from "chai";
-import googleStub from './../../src/components/search/location/tests/google_helper/google_stub';
+import React from 'react';
+import ReactDOM from 'react-dom';
+import Geosuggest from 'react-geosuggest';
 
-window.google = global.google = googleStub();
+import {
+  QueryAccessor,
+  SearchkitComponent,
+  SearchkitComponentProps,
+  ReactComponentType,
+  renderComponent
+} from 'searchkit';
 
-import CRUKSearchkitLocationInput from '../../src/components/search/location/CRUKSearchkitLocationInput'
+import { CRUKSearchkitLocationAccessor } from './CRUKSearchkitLocationAccessor';
 
-module.exports = (searchkit) => {
+export default class CRUKSearchkitLocationInput extends SearchkitComponent {
+  accessor:CRUKSearchkitLocationAccessor
 
-  const story = (
-    <CRUKSearchkitLocationInput
-      searchkit={searchkit}
-      field="location"
-      id="loc"
-    />
-  )
+  static propTypes = {
+    queryDelay: React.PropTypes.number,
+    placeholder: React.PropTypes.string,
+    initialValue: React.PropTypes.string,
+    country: React.PropTypes.string,
+    radius: React.PropTypes.string,
+    location: React.PropTypes.object,
+    fixtures: React.PropTypes.array,
+    autoActivateFirstSuggest: React.PropTypes.bool,
+    updateSearch: React.PropTypes.func,
+    ...SearchkitComponent.propTypes,
+  }
 
-  // Story specific tests.
-  // specs(() => describe('Location input', function () {
-  //   it('Location input should have the geosuggest__input class', function () {
-  //     let output = mount(story);
-  //     expect(output.find('input[type="text"]').hasClass('geosuggest__input')).to.be.true;
-  //   });
-  // }));
+  constructor(props) {
+    super(props);
 
-  return story;
+    this.state = {
+      lat: null,
+      lng: null,
+      placeId: null,
+      searchedAddress: null
+    };
+
+    this.preformedSearch = false;
+
+    this.onSuggestSelect = this.onSuggestSelect.bind(this);
+    this.getSelectedLocation = this.getSelectedLocation.bind(this);
+    this.onChange = this.onChange.bind(this);
+    this.onFocus = this.onFocus.bind(this);
+    this.onBlur = this.onBlur.bind(this);
+    this.getSuggestLabel = this.getSuggestLabel.bind(this);
+    this.onSuggestNoResults = this.onSuggestNoResults.bind(this);
+    this.onKeyPress = this.onKeyPress.bind(this);
+    this.updateParentState = this.updateParentState.bind(this);
+    this.resetState = this.resetState.bind(this);
+    this.locationSort = this.locationSort.bind(this);
+    this.handleEmptyLabel = this.handleEmptyLabel.bind(this);
+  }
+
+  /**
+   * When a suggest got selected
+   * @param  {Object} suggest The suggest
+   */
+  onSuggestSelect(suggest) {
+    const { searchedAddress } = this.state;
+    this.setState({
+      lat: suggest.lat,
+      lng: suggest.lng,
+      placeId: suggest.placeId,
+      searchedAddress: searchedAddress
+    }, () => this.preformSearch(suggest));
+    this.refs.g_wrapper.className = 'cr-geosuggest-wrapper';
+    this.preformSearch(suggest);
+    this.removeEmptyLabel();
+  }
+
+  onChange(suggest) {
+    this.refs.geoLoader.className = 'geoSuggestLoader activated'
+    if (suggest === '') {
+      this.refs.geoLoader.className = 'geoSuggestLoader'
+      this.refs.g_wrapper.className = 'cr-geosuggest-wrapper cr-geosuggest-wrapper--active'
+      this.resetState(this.preformSearch({ location: this.state }))
+    }
+  }
+
+  resetState(callback) {
+    const latLng = {
+      lat: null,
+      lng: null,
+      placeId: null,
+      searchedAddress: null
+    }
+    this.setState(latLng, callback)
+  }
+
+  onFocus(suggest) {
+    this.refs.g_wrapper.className = 'cr-geosuggest-wrapper cr-geosuggest-wrapper--active'
+  }
+
+  onBlur(suggest) {
+    this.refs.g_wrapper.className = 'cr-geosuggest-wrapper';
+    document.querySelector('.geosuggest__suggests').className = 'geosuggest__suggests geosuggest__suggests--hidden';
+    const exitingItem = document.getElementsByClassName('geosuggest-item--disabled');
+    if (exitingItem[0]) this.refs.geoSuggest.setState({ userInput: '' });
+    this.removeEmptyLabel();
+
+    // Add the first suggest as default on field blur.
+    const { suggests } = this.refs.geoSuggest.state;
+    if (suggests && suggests[0] && !this.refs.geoSuggest.state.activeSuggest) {
+      this.reverseGeocode(suggests[0]);
+    }
+  }
+
+  reverseGeocode(suggest, callback) {
+    const self = this;
+    this.refs.geoSuggest.geocoder.geocode({ placeId: suggest.placeId }, (results, status) => {
+      if (status === window.google.maps.GeocoderStatus.OK && results[0].geometry) {
+        const loc = {
+          placeId: suggest.placeId,
+          lat: results[0].geometry.location.lat(),
+          lng: results[0].geometry.location.lng()
+        };
+        self.props.updateSearch.call(self, { loc }, callback);
+      }
+    });
+  }
+
+  getSuggestLabel(suggest) {
+    this.refs.geoLoader.className = 'geoSuggestLoader'
+    this.refs.g_wrapper.className = 'cr-geosuggest-wrapper cr-geosuggest-wrapper--dropdown'
+    return suggest.description
+  }
+
+  onSuggestNoResults(userInputs) {
+    const self = this;
+    if (this.refs.geoSuggest.refs.input.refs.input.value !== '') {
+      setTimeout(function(){
+        self.handleEmptyLabel();
+      }, 1000);
+    }
+  }
+
+  handleEmptyLabel() {
+    const exitingItem = document.getElementsByClassName('geosuggest-item--disabled');
+    const resultList = document.querySelector('.geosuggest__suggests');
+    this.removeEmptyLabel();
+    const li = document.createElement('li');
+    li.className = 'geosuggest-item geosuggest-item--disabled';
+    li.innerHTML = 'No results';
+    resultList.className = 'geosuggest__suggests';
+    this.refs.geoLoader.className = 'geoSuggestLoader'
+    resultList.appendChild(li);
+  }
+
+  removeEmptyLabel() {
+    const resultList = document.querySelector('.geosuggest__suggests');
+    const exitingItem = document.getElementsByClassName('geosuggest-item--disabled');
+    if (exitingItem[0]) resultList.removeChild(exitingItem[0]);
+  }
+
+  updateParentState(argState) {
+    if (Object.keys(argState[this.props.id]).length === 0) {
+      this.resetState()
+    } else {
+      this.getSelectedLocation(argState)
+    }
+  }
+
+  onKeyPress() {
+    // this.refs.geoLoader.className = 'geoSuggestLoader activated'
+  }
+
+  getSelectedLocation(argState) {
+    const geocoder = new window.google.maps.Geocoder()
+    const self = this
+
+    this.preformedSearch = true
+    geocoder.geocode( { 'placeId' : argState[this.props.id].placeId }, function( results, status ) {
+      if( status == google.maps.GeocoderStatus.OK && results[0].address_components) {
+        self.setState({searchedAddress: self.buildAddressFormattedString(results[0].address_components)})
+        self.forceUpdate()
+      }
+    } );
+  }
+
+  preformSearch(query) {
+    const { lat, lng } = this.state;
+    const sortKey = query.location.lat ? 'location' : 'date';
+    this.locationSort(sortKey);
+    if ((query.location.lat == lat) && (query.location.lng == lng)) {
+      this.accessor.state = this.accessor.state.clear()
+    }
+    else {
+      this.accessor.state = this.accessor.state.setValue({
+        lat: query.location.lat,
+        lng: query.location.lng,
+        placeId: query.placeId,
+      })
+    }
+
+    this.searchkit.performSearch()
+  }
+
+  locationSort(sortValue = 'location') {
+    const sortIndex = this.searchkit.accessors.accessors.map((v, i) => { return {i: i, v: v.key} }).filter(v => v.v === 'sort');
+    if (sortIndex.length > 0)
+      this.searchkit.accessors.accessors[sortIndex[0].i].state = this.searchkit.accessors.accessors[sortIndex[0].i].state.setValue(sortValue);
+  }
+
+  buildAddressFormattedString(locations) {
+    return locations
+      .map((v, i, a) => v.long_name)
+      .filter((v, i, a) => a.indexOf(v) === i && a.length > i + 1)
+      .filter(function (v, i, a) {
+        return a.filter(val => v !== val)
+            .map(val => v.indexOf(val) === -1)
+            .join('')
+            .indexOf('false') === -1
+      })
+      .join(', ');
+  }
+
+  defineAccessor() {
+    const { id, title, field, resultRadius } = this.props;
+    const updateParentState = this.updateParentState
+    return new CRUKSearchkitLocationAccessor(id, {
+      id, title, field, resultRadius, updateParentState
+    });
+  }
+
+  /**
+   * Render the example app.
+   */
+  render() {
+    const { searchedAddress } = this.state;
+    const argState = this.accessor.getQueryObject();
+
+    if (!this.preformedSearch && argState[this.props.id] !== undefined && Object.keys(argState[this.props.id]).length > 0) {
+      this.getSelectedLocation(argState);
+    }
+
+    const inputClassName = this.props.inputClassName + ' form-control';
+
+    return (
+      <div className="cr-geosuggest-wrapper" ref="g_wrapper">
+        <div className="form-group">
+          <Geosuggest
+            queryDelay={this.props.queryDelay}
+            ref="geoSuggest"
+            placeholder={this.props.placeholder}
+            initialValue={searchedAddress || this.props.initialValue}
+            fixtures={this.props.fixtures}
+            onSuggestSelect={this.onSuggestSelect}
+            onSuggestNoResults={this.onSuggestNoResults}
+            onChange={this.onChange}
+            onFocus={this.onFocus}
+            onBlur={this.onBlur}
+            onKeyPress={this.onKeyPress}
+            getSuggestLabel={this.getSuggestLabel}
+            location={this.props.location}
+            radius={this.props.radius}
+            country={this.props.country}
+            inputClassName={inputClassName}
+            autoActivateFirstSuggest={this.props.autoActivateFirstSuggest}
+          />
+          <div className="geoSuggestLoader" ref="geoLoader"></div>
+        </div>
+      </div>
+    )
+  }
 }
